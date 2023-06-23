@@ -1,0 +1,217 @@
+---
+title: "Airline Passenger Satisfication Dataset Cleaning & EDA"
+date: "2022-09-19"
+output:
+  pdf_document:
+    toc: yes
+  html_document:
+    toc: yes
+    number_sections: yes
+    df_print: paged
+    toc_float: yes
+    self_contained: yes
+    code_folding: hide
+    theme: flatly
+---
+```{r setup, include=FALSE, warning=FALSE}
+library(tidyverse)
+library(naniar)
+library(mice)
+library(nnet)
+library(rsq)
+knitr::opts_chunk$set(echo = TRUE, fig.align = "center",warning=FALSE)
+```
+
+# Data cleaning
+## Load data
+```{r load data}
+dftrain <- read.csv("train.csv")
+dftest <- read.csv("test.csv")
+all <- df <- rbind(dftrain,dftest)
+dim(all)
+```
+
+```{r}
+head(all)
+#str(all)
+```
+
+## Missing values
+### Explore missing data: the percentage of missing data
+```{r}
+miss_var_summary(all) %>% filter(pct_miss>0)
+```
+
+```{r Visualize missing data}
+md.pattern(all, rotate.names = TRUE)
+```
+
+### Impute the NA values
+For the percentage of missing data is very small, and avoid throwing away any valuable information. We replace missing values with the prediction using a simple linear regression, as Arrival.Delay.in.Minutes has a high positive relationship with Departure.Delay.in.Minutes.
+
+```{r}
+plot(all$Departure.Delay.in.Minutes,all$Arrival.Delay.in.Minutes, pch = 1)
+lm1 = lm(Arrival.Delay.in.Minutes ~ Departure.Delay.in.Minutes, data = all)
+rsq(lm1) # rsquared is large
+
+all$Arrival.Delay.in.Minutes[is.na(all$Arrival.Delay.in.Minutes)] = predict(lm1, data.frame(Departure.Delay.in.Minutes = all$Departure.Delay.in.Minutes[is.na(all$Arrival.Delay.in.Minutes)]))
+```
+
+
+```{r}
+sum(is.na(all))
+dim(all)
+```
+
+## Identify Reponse Variable;Imbalance data?
+```{r}
+df.tbl <- tibble(df)
+df.pos <- df.tbl %>% filter(satisfaction=="satisfied")
+df.neg <- df.tbl %>% filter(satisfaction=="neutral or dissatisfied")
+
+tar.prop <- data.frame(Per=round(c(nrow(df.pos)/nrow(df.tbl),nrow(df.neg)/nrow(df.tbl)),3),Class=c("Satisfied","Neutral or dissatisfied"))
+label= paste(tar.prop$Class,scales::percent(tar.prop$Per,0.01))
+pie(tar.prop$Per,labels = label,col = c("darkorange","deepskyblue3"), main = "Percentage of two target classes")
+```
+
+## Data types 
+### Find all columns in characters
+```{r}
+chas = sapply(all, class)[sapply(all, class) == "character"]
+names(chas)
+```
+
+### Transform and Dummy
+```{r}
+#Change columns in characters to nomial variables or ordinal variables and set dummy variables for nomial varaiables.
+all[names(chas)[1:3]] = lapply(all[,names(chas)[1:3]], class.ind)
+all$Class[all$Class == "Eco"] = 0
+all$Class[all$Class == "Eco Plus"] = 1
+all$Class[all$Class == "Business"] = 2
+all$Class = as.numeric(all$Class)
+#all$Class = factor(all$Class, levels = c("Eco","Eco Plus","Business"), ordered = TRUE)
+```
+
+## Outliers
+### Outliers of numeric variables
+```{r}
+par(mfrow = c(1,2))
+
+y<-factor(all$satisfaction)
+plot(all$Age,y,main = "Age")
+boxplot(all$Age,main = "Age")
+
+plot(all$Flight.Distance,y,main = "Flight.Distance")
+boxplot(all$Flight.Distance,main = "Flight.Distance")
+
+plot(all$Departure.Delay.in.Minutes,y,main = "Departure.Delay.in.Minutes")
+boxplot(all$Departure.Delay.in.Minutes,main = "Departure.Delay.in.Minutes")
+
+plot(all$Arrival.Delay.in.Minutes,y,main = "Arrival.Delay.in.Minutes")
+boxplot(all$Arrival.Delay.in.Minutes,main = "Arrival.Delay.in.Minutes")
+
+```
+
+
+### Dataset without outliers
+```{r}
+no_outliers_all = subset(all, all$Departure.Delay.in.Minutes < 1500 & all$Arrival.Delay.in.Minutes < 1500)
+dim(no_outliers_all)
+```
+
+# Visualization
+## Correlation
+```{r, fig.width=7,fig.height=7}
+cor_data = no_outliers_all[-1][-1]
+cor_data$satisfaction = class.ind(cor_data$satisfaction)
+library(corrplot)
+corr = cor(cor_data)
+corrplot(corr,type = "upper")
+```
+
+## Do histograms/density estimations show anything interesting
+### Age
+```{r}
+means <- df.tbl %>%
+  group_by(satisfaction) %>%
+  summarise(mean = mean(Age))
+
+ggplot(df.tbl,aes(x=Age,color=factor(satisfaction),fill=factor(satisfaction))) + 
+  scale_color_manual(values = c("deepskyblue3","darkorange"),labels=c("Neutral or dissatisfied","Satisfied")) +
+  scale_fill_manual(values = c("deepskyblue3","darkorange"),labels=c("Neutral or dissatisfied","Satisfied"))+
+  geom_density(alpha=0.5) + 
+  geom_vline(data = means, aes(xintercept = mean, color=factor(satisfaction)),linetype="dashed") +
+  labs(title = "Distributon of Age by Satisfication Level",
+       x = "Age",
+       y = "Density",
+       fill="Satisfication Level",
+       color="Satisfication Level")+
+  theme_minimal()
+```
+
+### Inflight Service
+```{r}
+means <- df.tbl %>%
+  group_by(satisfaction) %>%
+  summarise(mean = mean(Inflight.service))
+
+ggplot(df.tbl,aes(x=Inflight.service,color=factor(satisfaction),fill=factor(satisfaction))) + 
+  scale_color_manual(values = c("deepskyblue3","darkorange"),labels=c("Neutral or dissatisfied","Satisfied")) +
+  scale_fill_manual(values = c("deepskyblue3","darkorange"),labels=c("Neutral or dissatisfied","Satisfied"))+
+  geom_bar(alpha=0.65,pos="identity",width=1) + 
+  geom_vline(data = means, aes(xintercept = mean, color=factor(satisfaction)),linetype="dashed") +
+  labs(title = "Distributon of Inflight Service by Satisfication Level",
+       x = "Inflight Service",
+       y = "Density",
+       fill="Satisfication Level",
+       color="Satisfication Level")+
+  scale_x_continuous(breaks=seq(1:5), labels = seq(1:5))+
+  theme_minimal()
+```
+
+### Flight distance & Travel type
+```{r violin plot}
+library(ggunchained)
+
+ggplot(df.tbl,aes(x=Type.of.Travel,y=Flight.Distance,fill=factor(satisfaction)))+
+  geom_split_violin()+
+  scale_fill_manual(values = c("deepskyblue3","darkorange"),labels=c("Neutral or dissatisfied","Satisfied"))+
+  labs(title = "Distributon of Flight Distance by Satisfication Level and Travel Type",
+       x = "Travel Type",
+       y = "Flight Distance",
+       fill="Satisfication Level")+  
+  theme_minimal()
+```
+
+### Class
+```{r, fig.width=5,fig.height=3}
+ggplot(df.tbl, aes(Class, fill = factor(satisfaction))) +
+  geom_bar() + 
+  labs(title = "Satisfication Level by Class",
+       x = "Class",
+       y = "Count",
+       fill="Satisfication Level") +
+  scale_fill_manual(values = c("deepskyblue3","darkorange"),labels=c("Neutral or dissatisfied","Satisfied"))+
+  theme_minimal()
+```
+
+## PCA
+```{r}
+dat.clean <- tibble(no_outliers_all)
+```
+
+```{r}
+class <- factor(dat.clean[["satisfaction"]])
+num.dat <- dat.clean %>% select(!satisfaction)
+pca_res <- prcomp(num.dat,scale=TRUE,center = TRUE)
+
+q1g.df <- data.frame(PC1 =pca_res$x[,1],
+                        PC2 =pca_res$x[,2],
+                        class=class)
+
+ggplot(q1g.df,aes(PC1,PC2,color=class)) + 
+  geom_point() + 
+  theme_minimal()
+```
+
+
